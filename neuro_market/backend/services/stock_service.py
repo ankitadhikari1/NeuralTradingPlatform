@@ -19,7 +19,15 @@ class StockService:
         return time.time()
 
     @staticmethod
+    def _normalize_symbol(symbol: str) -> str:
+        s = str(symbol or "").strip().upper()
+        if s.startswith("$"):
+            s = s[1:]
+        return s
+
+    @staticmethod
     def _simulated_stock(symbol: str) -> schemas.StockInfo:
+        symbol = StockService._normalize_symbol(symbol)
         seed = sum(ord(c) for c in symbol) + int(StockService._now() // 60)
         rng = random.Random(seed)
         base = 50 + (sum(ord(c) for c in symbol) % 250)
@@ -44,13 +52,15 @@ class StockService:
 
     @staticmethod
     def get_stock_price(symbol: str, max_age_s: float = 15.0) -> Optional[schemas.StockInfo]:
-        cached = StockService._price_cache.get(symbol)
+        key = str(symbol or "").strip().upper()
+        yf_symbol = StockService._normalize_symbol(symbol)
+        cached = StockService._price_cache.get(key)
         if cached and (StockService._now() - cached["ts"] < max_age_s):
             return cached["value"]
 
         try:
             def fetch():
-                ticker = yf.Ticker(symbol)
+                ticker = yf.Ticker(yf_symbol)
                 info = ticker.info
                 return ticker, info
 
@@ -70,27 +80,30 @@ class StockService:
                     change = price - data['Open'].iloc[-1]
                     change_percent = (change / data['Open'].iloc[-1]) * 100
                 else:
-                    value = StockService._simulated_stock(symbol)
-                    StockService._price_cache[symbol] = {"ts": StockService._now(), "value": value}
+                    value = StockService._simulated_stock(yf_symbol)
+                    value.symbol = key
+                    StockService._price_cache[key] = {"ts": StockService._now(), "value": value}
                     return value
 
             value = schemas.StockInfo(
-                symbol=symbol,
+                symbol=key,
                 price=float(price),
                 change=float(change),
                 change_percent=float(change_percent),
                 company_name=company_name
             )
-            StockService._price_cache[symbol] = {"ts": StockService._now(), "value": value}
+            StockService._price_cache[key] = {"ts": StockService._now(), "value": value}
             return value
         except TimeoutError:
-            value = StockService._simulated_stock(symbol)
-            StockService._price_cache[symbol] = {"ts": StockService._now(), "value": value}
+            value = StockService._simulated_stock(yf_symbol)
+            value.symbol = key
+            StockService._price_cache[key] = {"ts": StockService._now(), "value": value}
             return value
         except Exception as e:
-            print(f"Error fetching stock data for {symbol}: {e}")
-            value = StockService._simulated_stock(symbol)
-            StockService._price_cache[symbol] = {"ts": StockService._now(), "value": value}
+            print(f"Error fetching stock data for {key}: {e}")
+            value = StockService._simulated_stock(yf_symbol)
+            value.symbol = key
+            StockService._price_cache[key] = {"ts": StockService._now(), "value": value}
             return value
 
     @staticmethod
@@ -122,14 +135,16 @@ class StockService:
 
     @staticmethod
     def get_historical_data(symbol: str, period: str = "1mo") -> List[Dict[str, Any]]:
-        cache_key = f"{symbol}:{period}"
+        key = str(symbol or "").strip().upper()
+        yf_symbol = StockService._normalize_symbol(symbol)
+        cache_key = f"{key}:{period}"
         cached = StockService._history_cache.get(cache_key)
         if cached and (StockService._now() - cached["ts"] < 60):
             return cached["value"]
 
         try:
             def fetch():
-                ticker = yf.Ticker(symbol)
+                ticker = yf.Ticker(yf_symbol)
                 return ticker.history(period=period)
 
             history = StockService._with_timeout(fetch, timeout_s=3.0)
@@ -156,19 +171,21 @@ class StockService:
             StockService._history_cache[cache_key] = {"ts": StockService._now(), "value": data}
             return data
         except Exception as e:
-            print(f"Error fetching historical data for {symbol}: {e}")
+            print(f"Error fetching historical data for {key}: {e}")
             return []
 
     @staticmethod
     def get_candles(symbol: str, interval: str = "1m", period: str = "1d") -> List[Dict[str, Any]]:
-        cache_key = f"{symbol}:{interval}:{period}"
+        key = str(symbol or "").strip().upper()
+        yf_symbol = StockService._normalize_symbol(symbol)
+        cache_key = f"{key}:{interval}:{period}"
         cached = StockService._history_cache.get(cache_key)
         if cached and (StockService._now() - cached["ts"] < 10):
             return cached["value"]
 
         try:
             def fetch():
-                ticker = yf.Ticker(symbol)
+                ticker = yf.Ticker(yf_symbol)
                 return ticker.history(period=period, interval=interval)
 
             history = StockService._with_timeout(fetch, timeout_s=4.0)

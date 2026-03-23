@@ -328,12 +328,15 @@ async def pnl_websocket(websocket: WebSocket, token: str):
                 pnl_pct = (pnl / denom) * 100.0
 
                 triggered = False
+                trigger_reason = None
                 # Only check triggers if we have a real live price
                 if s:
                     if t.stop_loss is not None and mark <= float(t.stop_loss):
                         triggered = True
+                        trigger_reason = "STOP_LOSS"
                     if t.take_profit is not None and mark >= float(t.take_profit):
                         triggered = True
+                        trigger_reason = "TAKE_PROFIT"
 
                 if triggered:
                     credit = float(mark) * float(t.contracts) * 100.0
@@ -341,6 +344,30 @@ async def pnl_websocket(websocket: WebSocket, token: str):
                     t.exit_price = float(mark)
                     t.status = "CLOSED"
                     t.closed_at = _now()
+                    db.commit()
+                    db.add(
+                        database.Notification(
+                            user_id=user.id,
+                            type=str(trigger_reason or "OPTION_TRIGGER"),
+                            title=f"{t.underlying_symbol} option auto-closed",
+                            message=(
+                                f"{t.underlying_symbol} {t.option_type} was auto-closed at premium ${float(mark):.2f} "
+                                f"({trigger_reason or 'TRIGGER'})."
+                            ),
+                            symbol=t.underlying_symbol,
+                            notification_metadata=json.dumps(
+                                {
+                                    "option_trade_id": int(t.id),
+                                    "reason": trigger_reason,
+                                    "mark_price": float(mark),
+                                    "stop_loss": float(t.stop_loss) if t.stop_loss is not None else None,
+                                    "take_profit": float(t.take_profit) if t.take_profit is not None else None,
+                                }
+                            ),
+                            created_at=_now(),
+                            read_at=None,
+                        )
+                    )
                     db.commit()
                     if t.session_id:
                         pnl = (float(t.exit_price) - float(t.entry_price)) * float(t.contracts) * 100.0

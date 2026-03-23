@@ -22,6 +22,14 @@ The focus is educational: build trading discipline by surfacing emotional state 
   - `face` (raw face emotion distribution)
 - The UI shows a floating camera overlay while navigating the app.
 
+### Trading Sessions (Required for Trading)
+- Users must start a trading session before placing trades.
+- Sessions:
+  - enforce time windows (`expires_at`)
+  - collect behavioral metrics
+  - drive the leaderboard and analytics
+  - generate a PDF report at session end
+
 ### Stock Trading (Simulator)
 - Uses yfinance to fetch market prices, with timeouts and fallback simulation for reliability.
 - Records trades and updates holdings.
@@ -42,3 +50,14 @@ The focus is educational: build trading discipline by surfacing emotional state 
   - Technical indicators (SMA20/SMA50/RSI14)
   - User’s realized trade stats + emotional baseline
 
+### Admin Workflows
+- Admin users can:
+  - list users, set/top-up cash balances
+  - inspect user trades/options/emotions/sessions
+  - explore the entire DB schema and table data via the Admin Database Explorer UI
+
+### Leaderboard
+- Ranks non-admin users by a combined score derived from:
+  - portfolio value / profit %
+  - session win rate and discipline metrics
+  - behavior/risk signals

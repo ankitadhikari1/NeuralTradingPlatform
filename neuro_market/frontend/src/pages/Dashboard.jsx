@@ -1,14 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
 import { Search, TrendingUp, TrendingDown, ChevronRight, Activity, PieChart, Wallet, Camera, Brain, Star } from 'lucide-react';
 import BrainwaveVisualizer from '../components/BrainwaveVisualizer';
-import AITradingAssistant from '../components/AITradingAssistant';
 import EmotionalTrend from '../components/EmotionalTrend';
-import TradingSimulator from '../components/TradingSimulator';
+import MarketNews from '../components/MarketNews';
 import CandlestickChart from '../components/CandlestickChart';
+import NeuroLoader from '../components/NeuroLoader';
 
-const Dashboard = () => {
+const Dashboard = ({ onRefreshUser }) => {
   const [stocks, setStocks] = useState([]);
   const [portfolio, setPortfolio] = useState([]);
   const [watchlist, setWatchlist] = useState([]);
@@ -18,11 +18,7 @@ const Dashboard = () => {
   const [quickSymbol, setQuickSymbol] = useState('AAPL');
   const [quickPrice, setQuickPrice] = useState(null);
 
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setError('');
       setLoading(true);
@@ -34,13 +30,18 @@ const Dashboard = () => {
       setStocks(stocksRes.data);
       setPortfolio(portfolioRes.data);
       setWatchlist(watchlistRes.data);
+      if (onRefreshUser) onRefreshUser();
     } catch (error) {
       console.error('Failed to fetch dashboard data:', error);
       setError(error?.response?.data?.detail || error?.message || 'Failed to load dashboard data');
     } finally {
       setLoading(false);
     }
-  };
+  }, [onRefreshUser]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
   const toggleWatchlist = async (e, symbol) => {
     e.preventDefault();
@@ -79,11 +80,7 @@ const Dashboard = () => {
   const marketSentiment = gainerCount > loserCount ? 'Bullish' : gainerCount < loserCount ? 'Bearish' : 'Neutral';
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div>
-      </div>
-    );
+    return <NeuroLoader message="Synchronizing Neural Market Data..." />;
   }
 
   if (error) {
@@ -312,9 +309,9 @@ const Dashboard = () => {
           </div>
         </div>
 
-        {/* Sidebar: Your Portfolio Preview + AI Assistant */}
+        {/* Sidebar: Your Portfolio Preview + Market News */}
         <div className="space-y-6">
-          <AITradingAssistant />
+          <MarketNews />
 
           <div className="flex items-center justify-between mt-8">
             <h2 className="text-xl font-bold">Watchlist</h2>

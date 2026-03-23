@@ -1,16 +1,20 @@
 import React, { useCallback, useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { TrendingUp, TrendingDown, AlertTriangle, ShieldCheck, Camera, Star, Clock } from 'lucide-react';
+import { TrendingUp, TrendingDown, AlertTriangle, ShieldCheck, Camera, Star, Clock, Search, ChevronDown, Trash2 } from 'lucide-react';
 import CandlestickChart from '../components/CandlestickChart';
 import { useEmotion } from '../context/EmotionContext';
 import Modal from '../components/Modal';
+import NeuroTradePulse from '../components/NeuroTradePulse';
 
-const StockDetail = () => {
+const StockDetail = ({ onRefreshUser }) => {
   const { symbol } = useParams();
+  const navigate = useNavigate();
   const { emotion: liveEmotion } = useEmotion();
   const emotion = liveEmotion || { state: 'Calm', confidence: 0.0 };
   const [stock, setStock] = useState(null);
+  const [allStocks, setAllStocks] = useState([]);
+  const [searchSymbol, setSearchSymbol] = useState('');
   const [loading, setLoading] = useState(true);
   const [pageError, setPageError] = useState('');
   const [quantity, setQuantity] = useState(1);
@@ -21,6 +25,10 @@ const StockDetail = () => {
   const [tradeMarkers, setTradeMarkers] = useState([]);
   const [livePrice, setLivePrice] = useState(null);
   const [tradeHistory, setTradeHistory] = useState([]);
+
+  const [alerts, setAlerts] = useState([]);
+  const [alertPrice, setAlertPrice] = useState('');
+  const [alertDirection, setAlertDirection] = useState('ABOVE');
 
   const [optType, setOptType] = useState('CALL');
   const [optStrike, setOptStrike] = useState('');
@@ -92,6 +100,7 @@ const StockDetail = () => {
       const resp = await axios.post('/trading/session/end', { session_id: Number(activeSession.id) });
       setActiveSession(null);
       setAlert({ type: 'success', message: `Session ended. Report ${resp.data?.report_path ? 'generated' : 'processing'}.` });
+      if (onRefreshUser) onRefreshUser();
     } catch (e) {
       setAlert({ type: 'error', message: e?.response?.data?.detail || e?.message || 'Failed to end session' });
     } finally {
@@ -164,10 +173,12 @@ const StockDetail = () => {
     setLoading(true);
     setPageError('');
     try {
-      const [stockRes] = await Promise.all([
+      const [stockRes, popularRes] = await Promise.all([
         axios.get(`/trading/stocks/${symbol}`),
+        axios.get('/trading/stocks/popular')
       ]);
       setStock(stockRes.data);
+      setAllStocks(popularRes.data || []);
       const me = await axios.get('/auth/me');
       setCashBalance(Number(me.data.cash_balance || 0));
       const historyRes = await axios.get('/trading/history');
@@ -206,18 +217,52 @@ const StockDetail = () => {
     }
   }, []);
 
+  const fetchAlerts = useCallback(async () => {
+    try {
+      const resp = await axios.get(`/trading/alerts/${symbol}`);
+      setAlerts(resp.data || []);
+    } catch (err) {
+      console.error('Failed to fetch alerts:', err);
+    }
+  }, [symbol]);
+
+  const addAlert = async () => {
+    if (!alertPrice || isNaN(Number(alertPrice))) return;
+    try {
+      await axios.post('/trading/alerts', {
+        symbol: symbol.toUpperCase(),
+        target_price: Number(alertPrice),
+        direction: alertDirection,
+      });
+      setAlertPrice('');
+      fetchAlerts();
+    } catch (err) {
+      console.error('Failed to add alert:', err);
+    }
+  };
+
+  const deleteAlert = async (id) => {
+    try {
+      await axios.delete(`/trading/alerts/${id}`);
+      fetchAlerts();
+    } catch (err) {
+      console.error('Failed to delete alert:', err);
+    }
+  };
+
   useEffect(() => {
     fetchStockData();
     fetchOptionPositions();
     fetchWatchlist();
     fetchTotalProfit();
     fetchActiveSession();
+    fetchAlerts();
     if (!optExpiry) {
       const d = new Date();
       d.setDate(d.getDate() + 30);
       setOptExpiry(d.toISOString().slice(0, 10));
     }
-  }, [fetchActiveSession, fetchOptionPositions, fetchStockData, fetchTotalProfit, fetchWatchlist, optExpiry, symbol]);
+  }, [fetchActiveSession, fetchAlerts, fetchOptionPositions, fetchStockData, fetchTotalProfit, fetchWatchlist, optExpiry, symbol]);
 
   useEffect(() => {
     let ws;
@@ -260,6 +305,12 @@ const StockDetail = () => {
         const ts = Math.floor(new Date(t.timestamp).getTime() / 1000);
         const time = ts - (ts % 60);
         const isBuy = t.trade_type === 'BUY';
+        const emotionIcon = 
+          t.emotional_state?.toLowerCase().includes('calm') ? '🧠' :
+          t.emotional_state?.toLowerCase().includes('stress') ? '🔥' :
+          t.emotional_state?.toLowerCase().includes('anxiety') ? '😰' :
+          t.emotional_state?.toLowerCase().includes('excitement') ? '⚡' : '👤';
+          
         setTradeHistory((prev) => [t, ...prev]);
         setTradeMarkers((prev) => [
           ...prev,
@@ -268,12 +319,13 @@ const StockDetail = () => {
             position: isBuy ? 'belowBar' : 'aboveBar',
             color: isBuy ? '#10b981' : '#ef4444',
             shape: isBuy ? 'arrowUp' : 'arrowDown',
-            text: `${t.trade_type} ${t.quantity}`,
+            text: `${emotionIcon} ${t.trade_type} ${t.quantity}`,
           },
         ]);
       }
       setAlert({ type: 'success', message: `Successfully ${orderType === 'BUY' ? 'bought' : 'sold'} ${quantity} shares of ${symbol}` });
       setConfirmModal({ open: false, title: '', message: '', tone: 'primary', onConfirm: null });
+      if (onRefreshUser) onRefreshUser();
     } catch (error) {
       const detail = error.response?.data?.detail;
       if (typeof detail === 'object' && detail.action === 'BLOCK') {
@@ -435,6 +487,14 @@ const StockDetail = () => {
     fetchActiveSession();
   }, [activeSession?.id, fetchActiveSession, sessionSecondsLeft]);
 
+  const handleQuickJump = (e) => {
+    e.preventDefault();
+    if (searchSymbol.trim()) {
+      navigate(`/stock/${searchSymbol.trim().toUpperCase()}`);
+      setSearchSymbol('');
+    }
+  };
+
   if (loading) return <div className="flex items-center justify-center h-64"><div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div></div>;
 
   if (!stock) {
@@ -477,8 +537,36 @@ const StockDetail = () => {
           </button>
           <div>
             <div className="flex items-center gap-3 mb-2">
-              <h1 className="text-4xl font-extrabold text-white">{symbol}</h1>
-              <span className="px-3 py-1 bg-slate-800 rounded-lg text-slate-400 font-medium">{stock.company_name}</span>
+              <div className="relative flex items-center bg-slate-800 rounded-2xl border border-slate-700 hover:border-blue-500/50 transition-all group overflow-hidden">
+                <div className="px-4 py-2 flex items-center gap-2">
+                  <h1 className="text-4xl font-black text-white">{symbol}</h1>
+                  <ChevronDown size={20} className="text-slate-500 group-hover:text-blue-400" />
+                </div>
+                <select 
+                  className="absolute inset-0 opacity-0 cursor-pointer z-10 w-full"
+                  value={symbol}
+                  onChange={(e) => navigate(`/stock/${e.target.value}`)}
+                >
+                  <option value={symbol}>{symbol} - Current</option>
+                  {allStocks.filter(s => s.symbol !== symbol).map(s => (
+                    <option key={s.symbol} value={s.symbol}>{s.symbol} - {s.company_name}</option>
+                  ))}
+                </select>
+              </div>
+              
+              <div className="flex items-center gap-2 ml-2">
+                <form onSubmit={handleQuickJump} className="relative group">
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-blue-500" />
+                  <input 
+                    type="text"
+                    value={searchSymbol}
+                    onChange={(e) => setSearchSymbol(e.target.value)}
+                    placeholder="Search ticker..."
+                    className="bg-slate-900/60 border border-slate-700/50 rounded-xl pl-9 pr-4 py-2 text-sm text-white outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/20 w-32 focus:w-48 transition-all"
+                  />
+                </form>
+                <span className="px-3 py-1 bg-slate-800/50 rounded-lg text-slate-500 text-xs font-bold uppercase tracking-wider">{stock.company_name}</span>
+              </div>
             </div>
             <div className="flex items-center gap-4">
               <h2 className="text-3xl font-bold">${stock.price.toFixed(2)}</h2>
@@ -738,19 +826,26 @@ const StockDetail = () => {
                     <th className="px-6 py-3">Type</th>
                     <th className="px-6 py-3">Qty</th>
                     <th className="px-6 py-3">Price</th>
-                    <th className="px-6 py-3">Emotion</th>
+                    <th className="px-6 py-3">Neuro-State</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-700">
-                  {tradeHistory.length ? tradeHistory.slice(0, 50).map((t) => (
-                    <tr key={t.id} className="hover:bg-slate-700/30 transition-colors">
-                      <td className="px-6 py-3 text-slate-300">{new Date(t.timestamp).toLocaleString()}</td>
-                      <td className={`px-6 py-3 font-bold ${t.trade_type === 'BUY' ? 'text-emerald-400' : 'text-rose-400'}`}>{t.trade_type}</td>
-                      <td className="px-6 py-3 font-mono">{t.quantity}</td>
-                      <td className="px-6 py-3 font-mono">${Number(t.price).toFixed(2)}</td>
-                      <td className="px-6 py-3 text-slate-400">{t.emotional_state || '—'}</td>
-                    </tr>
-                  )) : (
+                  {tradeHistory.length ? tradeHistory.slice(0, 50).map((t) => {
+                    const e = (t.emotional_state || 'Calm').toLowerCase();
+                    const color = e.includes('calm') ? 'text-emerald-400' : e.includes('stress') ? 'text-rose-400' : e.includes('anxiety') ? 'text-purple-400' : e.includes('excitement') ? 'text-amber-400' : 'text-slate-400';
+                    
+                    return (
+                      <tr key={t.id} className="hover:bg-slate-700/30 transition-colors">
+                        <td className="px-6 py-3 text-slate-300">{new Date(t.timestamp).toLocaleString()}</td>
+                        <td className={`px-6 py-3 font-bold ${t.trade_type === 'BUY' ? 'text-emerald-400' : 'text-rose-400'}`}>{t.trade_type}</td>
+                        <td className="px-6 py-3 font-mono">{t.quantity}</td>
+                        <td className="px-6 py-3 font-mono">${Number(t.price).toFixed(2)}</td>
+                        <td className={`px-6 py-3 text-xs font-bold uppercase tracking-wider ${color}`}>
+                          {t.emotional_state || '—'}
+                        </td>
+                      </tr>
+                    );
+                  }) : (
                     <tr><td className="px-6 py-6 text-slate-500" colSpan="5">No past trades for this stock yet.</td></tr>
                   )}
                 </tbody>
@@ -845,6 +940,72 @@ const StockDetail = () => {
             <p className="text-center mt-6 text-xs text-slate-500 uppercase tracking-widest font-bold">
               Emotional Guard Active
             </p>
+          </div>
+          <NeuroTradePulse volatility={0.4} />
+
+          <div className="card p-6 bg-slate-900/40 backdrop-blur-xl border-slate-700/50">
+            <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
+              <AlertTriangle size={20} className="text-amber-500" />
+              Price Alerts
+            </h3>
+            
+            <div className="space-y-4 mb-6">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Target Price</label>
+                  <input 
+                    type="number" 
+                    value={alertPrice}
+                    onChange={(e) => setAlertPrice(e.target.value)}
+                    placeholder={stock.price.toFixed(2)}
+                    className="input-field py-2 text-sm font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Condition</label>
+                  <select 
+                    value={alertDirection}
+                    onChange={(e) => setAlertDirection(e.target.value)}
+                    className="input-field py-2 text-sm font-bold"
+                  >
+                    <option value="ABOVE">Price Above</option>
+                    <option value="BELOW">Price Below</option>
+                  </select>
+                </div>
+              </div>
+              <button 
+                onClick={addAlert}
+                disabled={!alertPrice}
+                className="w-full btn-secondary py-3 text-xs font-black uppercase tracking-widest"
+              >
+                Set Alert
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Active Alerts</p>
+              {alerts.length > 0 ? alerts.map((a) => (
+                <div key={a.id} className="flex items-center justify-between p-3 bg-slate-950/50 rounded-xl border border-slate-800 group hover:border-slate-700 transition-colors">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-1.5 h-1.5 rounded-full ${a.direction === 'ABOVE' ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
+                    <div>
+                      <p className="text-xs font-bold text-white uppercase">{a.direction} ${Number(a.threshold).toFixed(2)}</p>
+                      <p className="text-[8px] text-slate-500 font-bold uppercase tracking-tighter">Target price alert</p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => deleteAlert(a.id)}
+                    className="p-1.5 text-slate-600 hover:text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              )) : (
+                <p className="text-[10px] text-slate-600 font-bold uppercase text-center py-4 border-2 border-dashed border-slate-800/50 rounded-xl">
+                  No alerts set for {symbol}
+                </p>
+              )}
+            </div>
           </div>
         </div>
       </div>

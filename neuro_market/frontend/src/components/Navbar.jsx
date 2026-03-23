@@ -1,16 +1,42 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Wallet, History, BarChart3, Camera, CameraOff, LogOut, TrendingUp, UserCog, Menu, X } from 'lucide-react';
+import axios from 'axios';
+import { LayoutDashboard, Wallet, History, BarChart3, Camera, CameraOff, LogOut, TrendingUp, UserCog, Menu, X, Database, Bell } from 'lucide-react';
 import { useEmotion } from '../context/EmotionContext';
+import NotificationCenter from './NotificationCenter';
 
 const Navbar = ({ user, onLogout }) => {
   const location = useLocation();
   const { active, wsStatus, wsCloseInfo, start, stop, emotion } = useEmotion();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
     setMenuOpen(false);
+    setNotificationsOpen(false);
   }, [location.pathname]);
+
+  const refreshNotifications = useCallback(async () => {
+    if (!user) return;
+    try {
+      await axios.post('/trading/notifications/evaluate');
+    } catch {
+      // ignore
+    }
+    try {
+      const resp = await axios.get('/trading/notifications', { params: { limit: 1, offset: 0 } });
+      setUnreadCount(Number(resp.data?.unread || 0));
+    } catch {
+      // ignore
+    }
+  }, [user]);
+
+  useEffect(() => {
+    refreshNotifications();
+    const interval = setInterval(refreshNotifications, 30000);
+    return () => clearInterval(interval);
+  }, [refreshNotifications]);
 
   const primaryNavItems = useMemo(
     () => [
@@ -28,7 +54,10 @@ const Navbar = ({ user, onLogout }) => {
       { name: 'Leaderboard', path: '/leaderboard', icon: TrendingUp },
       { name: 'Monitor', path: '/monitor', icon: Camera },
       { name: 'Analytics', path: '/analytics', icon: BarChart3 },
-      ...(user?.is_admin ? [{ name: 'Admin', path: '/admin', icon: UserCog }] : []),
+      ...(user?.is_admin ? [
+        { name: 'Admin', path: '/admin', icon: UserCog },
+        { name: 'Explorer', path: '/admin/explorer', icon: Database }
+      ] : []),
     ],
     [user?.is_admin]
   );
@@ -66,6 +95,24 @@ const Navbar = ({ user, onLogout }) => {
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setMenuOpen(false);
+              setNotificationsOpen(true);
+              refreshNotifications();
+            }}
+            className="relative p-2 rounded-lg transition-colors border text-slate-300 border-slate-600/40 bg-slate-700/30 hover:bg-slate-700/60"
+            title="Notifications"
+            aria-label="Notifications"
+          >
+            <Bell size={20} />
+            {unreadCount > 0 ? (
+              <span className="absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-blue-600 text-white text-[10px] font-black flex items-center justify-center">
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            ) : null}
+          </button>
           <button
             onClick={() => setMenuOpen((v) => !v)}
             className={`p-2 rounded-lg transition-colors border ${
@@ -153,6 +200,25 @@ const Navbar = ({ user, onLogout }) => {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {notificationsOpen && (
+        <div className="fixed inset-0 z-[60]">
+          <button
+            type="button"
+            aria-label="Close notifications"
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setNotificationsOpen(false)}
+          />
+          <div className="absolute top-16 right-4 left-4 md:left-auto md:w-auto">
+            <NotificationCenter
+              onClose={() => {
+                setNotificationsOpen(false);
+                refreshNotifications();
+              }}
+            />
           </div>
         </div>
       )}

@@ -51,6 +51,8 @@ class User(Base):
     watchlist = relationship("Watchlist", back_populates="user")
     emotion_logs = relationship("EmotionLog", back_populates="user")
     eeg_signals = relationship("EEGSignal", back_populates="user")
+    notifications = relationship("Notification", back_populates="user")
+    alert_rules = relationship("AlertRule", back_populates="user")
 
 class Watchlist(Base):
     __tablename__ = "watchlist"
@@ -61,6 +63,36 @@ class Watchlist(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="watchlist")
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    type = Column(String(32), index=True)
+    title = Column(String(120))
+    message = Column(Text)
+    symbol = Column(String(16), index=True, nullable=True)
+    notification_metadata = Column("metadata", Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    read_at = Column(DateTime, nullable=True, index=True)
+
+    user = relationship("User", back_populates="notifications")
+
+class AlertRule(Base):
+    __tablename__ = "alert_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    rule_type = Column(String(32), index=True)  # PRICE_TARGET | VOLATILITY
+    symbol = Column(String(16), index=True)
+    direction = Column(String(8), nullable=True)  # ABOVE | BELOW
+    threshold = Column(Float)
+    active = Column(Boolean, default=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    last_triggered_at = Column(DateTime, nullable=True, index=True)
+
+    user = relationship("User", back_populates="alert_rules")
 
 class Trade(Base):
     __tablename__ = "trades"

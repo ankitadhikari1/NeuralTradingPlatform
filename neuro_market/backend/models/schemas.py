@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
@@ -281,3 +281,43 @@ class AdminAnalytics(BaseModel):
     highest_profit_session: Optional[Dict[str, Any]] = None
     most_active_trader: Optional[Dict[str, Any]] = None
     risk_distribution: Dict[str, int]
+
+class Notification(BaseModel):
+    id: int
+    type: str
+    title: str
+    message: str
+    symbol: Optional[str] = None
+    notification_metadata: Optional[str] = Field(None, alias="metadata")
+    created_at: datetime
+    read_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+class NotificationListResponse(BaseModel):
+    total: int
+    unread: int
+    items: List[Notification]
+
+class AlertRule(BaseModel):
+    id: int
+    rule_type: str
+    symbol: str
+    direction: Optional[str] = None
+    threshold: float
+    active: bool
+    created_at: datetime
+    last_triggered_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+class CreatePriceTargetRule(BaseModel):
+    symbol: str
+    target_price: float
+    direction: str  # ABOVE | BELOW
+
+class CreateVolatilityRule(BaseModel):
+    symbol: str
+    threshold_percent: float

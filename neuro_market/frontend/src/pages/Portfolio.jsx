@@ -1,9 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, Treemap } from 'recharts';
-import { Wallet, TrendingUp, TrendingDown, PieChart as PieIcon } from 'lucide-react';
+import { Wallet, TrendingUp, TrendingDown, PieChart as PieIcon, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { useEmotion } from '../context/EmotionContext';
+import Modal from '../components/Modal';
 
-const Portfolio = () => {
+const Portfolio = ({ onRefreshUser }) => {
+  const { emotion: liveEmotion } = useEmotion();
   const [portfolio, setPortfolio] = useState([]);
   const [stocks, setStocks] = useState({});
   const [loading, setLoading] = useState(true);
@@ -11,16 +14,34 @@ const Portfolio = () => {
   const [optionPositions, setOptionPositions] = useState([]);
   const [allocationView, setAllocationView] = useState('donut');
 
-  useEffect(() => {
-    fetchPortfolio();
-  }, []);
+  // Sell Modal State
+  const [sellModal, setSellModal] = useState({ open: false, item: null, quantity: 1 });
+  const [alert, setAlert] = useState(null);
+  const [cooldown, setCooldown] = useState(0);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [sellConfirmation, setSellConfirmation] = useState({ required: false, message: '' });
 
-  const fetchPortfolio = async () => {
+  useEffect(() => {
+    let timer;
+    if (cooldown > 0) {
+      timer = setInterval(() => {
+        setCooldown((prev) => Math.max(0, prev - 1));
+      }, 1000);
+    }
+    return () => clearInterval(timer);
+  }, [cooldown]);
+
+  const fetchPortfolio = useCallback(async () => {
     try {
       const response = await axios.get('/trading/portfolio');
       setPortfolio(response.data);
-      const me = await axios.get('/auth/me');
-      setCashBalance(Number(me.data.cash_balance || 0));
+      if (onRefreshUser) {
+        const userData = await onRefreshUser();
+        if (userData) setCashBalance(Number(userData.cash_balance || 0));
+      } else {
+        const me = await axios.get('/auth/me');
+        setCashBalance(Number(me.data.cash_balance || 0));
+      }
       try {
         const opt = await axios.get('/options/positions');
         setOptionPositions(opt.data || []);
@@ -44,6 +65,84 @@ const Portfolio = () => {
       console.error('Failed to fetch portfolio:', error);
     } finally {
       setLoading(false);
+    }
+  }, [onRefreshUser]);
+
+  useEffect(() => {
+    fetchPortfolio();
+  }, [fetchPortfolio]);
+
+  const ensureActiveSession = async () => {
+    try {
+      const active = await axios.get('/trading/session/active');
+      if (active.data?.id) return active.data;
+    } catch {
+      // ignore
+    }
+    const started = await axios.post('/trading/session/start', { duration_minutes: 60 });
+    return started.data;
+  };
+
+  const submitSell = async ({ confirmed = false } = {}) => {
+    if (!sellModal.item) return;
+    setIsSubmitting(true);
+    setAlert(null);
+    try {
+      const item = sellModal.item;
+      const qty = Math.min(Number(sellModal.quantity || 0), Number(item.quantity || 0));
+      if (!Number.isFinite(qty) || qty <= 0) {
+        setAlert({ type: 'error', message: 'Enter a valid quantity to sell.' });
+        return;
+      }
+
+      await ensureActiveSession();
+
+      const px = Number(stocks[item.stock_symbol]?.price || item.avg_price);
+      const currentPrice = Number.isFinite(px) && px > 0 ? px : Number(item.avg_price || 0);
+      const emotion = liveEmotion || { state: 'Calm', confidence: 0.0 };
+
+      await axios.post('/trading/trade', {
+        stock_symbol: item.stock_symbol,
+        trade_type: 'SELL',
+        quantity: qty,
+        price: currentPrice,
+        emotional_state: `${emotion.state} (${(emotion.confidence * 100).toFixed(0)}%)`,
+        confirmed,
+      });
+
+      setAlert({ type: 'success', message: `Successfully sold ${qty} shares of ${item.stock_symbol}` });
+      setSellModal({ open: false, item: null, quantity: 1 });
+      setSellConfirmation({ required: false, message: '' });
+      fetchPortfolio();
+      if (onRefreshUser) onRefreshUser();
+    } catch (error) {
+      const detail = error.response?.data?.detail;
+      if (typeof detail === 'string' && detail.toLowerCase().includes('start a trading session')) {
+        setAlert({ type: 'error', message: 'Start a trading session before selling.' });
+        return;
+      }
+      if (typeof detail === 'object' && detail.action === 'BLOCK') {
+        setCooldown(detail.cooldown_remaining || 0);
+        setAlert({ type: 'error', message: detail.message });
+        return;
+      }
+      if (typeof detail === 'object' && detail.action === 'CONFIRMATION') {
+        setSellConfirmation({ required: true, message: String(detail.message || 'Please confirm to proceed.') });
+        return;
+      }
+      setAlert({ type: 'error', message: typeof detail === 'string' ? detail : "Sell failed. Please try again." });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleCloseOption = async (optionId) => {
+    try {
+      await axios.post(`/options/trade/${optionId}/close`);
+      setAlert({ type: 'success', message: 'Option position closed successfully' });
+      fetchPortfolio();
+    } catch (error) {
+      setAlert({ type: 'error', message: error.response?.data?.detail || 'Failed to close option position' });
     }
   };
 
@@ -279,6 +378,14 @@ const Portfolio = () => {
       </div>
 
       <div className="card overflow-hidden">
+        {alert && (
+          <div className={`m-4 p-4 rounded-lg flex items-start gap-3 ${
+            alert.type === 'success' ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-500' : 'bg-rose-500/10 border border-rose-500/30 text-rose-500'
+          }`}>
+            {alert.type === 'success' ? <ShieldCheck size={20} className="shrink-0" /> : <AlertTriangle size={20} className="shrink-0" />}
+            <p className="text-sm font-medium">{alert.message}</p>
+          </div>
+        )}
         <table className="w-full text-left">
           <thead>
             <tr className="bg-slate-700/50 text-slate-400 text-xs font-semibold uppercase tracking-wider">
@@ -288,6 +395,7 @@ const Portfolio = () => {
               <th className="px-6 py-4">Current Price</th>
               <th className="px-6 py-4 text-right">Market Value</th>
               <th className="px-6 py-4 text-right">Profit / Loss</th>
+              <th className="px-6 py-4 text-center">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-700">
@@ -321,12 +429,25 @@ const Portfolio = () => {
                       <p>${pl.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                       <p className="text-xs font-medium">{plPercent.toFixed(2)}%</p>
                     </td>
+                    <td className="px-6 py-4 text-center">
+                      <button 
+                        onClick={() => {
+                          setAlert(null);
+                          setSellConfirmation({ required: false, message: '' });
+                          setSellModal({ open: true, item, quantity: 1 });
+                        }}
+                        className="px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-black uppercase tracking-widest transition-all shadow-lg shadow-rose-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={Number(item.quantity || 0) <= 0}
+                      >
+                        SELL
+                      </button>
+                    </td>
                   </tr>
                 );
               })
             ) : (
               <tr>
-                <td colSpan="6" className="px-6 py-12 text-center text-slate-500">
+                <td colSpan="7" className="px-6 py-12 text-center text-slate-500">
                   <PieIcon size={48} className="mx-auto mb-4 opacity-20" />
                   <p className="text-lg font-medium">Your portfolio is empty</p>
                   <p className="text-sm">Start trading to see your assets here</p>
@@ -349,6 +470,7 @@ const Portfolio = () => {
                   <th className="px-4 py-3">Mark</th>
                   <th className="px-4 py-3 text-right">P/L</th>
                   <th className="px-4 py-3 text-right">P/L %</th>
+                  <th className="px-4 py-3 text-center">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-700">
@@ -359,6 +481,14 @@ const Portfolio = () => {
                     <td className="px-4 py-3 font-mono">${Number(p.mark_price).toFixed(2)}</td>
                     <td className={`px-4 py-3 text-right font-mono ${Number(p.pnl) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>${Number(p.pnl).toFixed(2)}</td>
                     <td className={`px-4 py-3 text-right font-mono ${Number(p.pnl_percent) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{Number(p.pnl_percent).toFixed(2)}%</td>
+                    <td className="px-4 py-3 text-center">
+                      <button 
+                        onClick={() => handleCloseOption(p.id)}
+                        className="p-1.5 rounded-lg bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white transition-all border border-rose-500/20 text-xs font-bold"
+                      >
+                        CLOSE
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -368,6 +498,91 @@ const Portfolio = () => {
           <p className="text-slate-500">No open options positions.</p>
         )}
       </div>
+
+      {/* Quick Sell Modal */}
+      <Modal 
+        open={sellModal.open}
+        onClose={() => {
+          setSellModal({ open: false, item: null, quantity: 1 });
+          setSellConfirmation({ required: false, message: '' });
+        }}
+        title={`Quick Sell: ${sellModal.item?.stock_symbol}`}
+        onConfirm={() => submitSell({ confirmed: sellConfirmation.required })}
+        confirmText={
+          isSubmitting ? 'Processing…' : cooldown > 0 ? `Locked (${cooldown}s)` : sellConfirmation.required ? 'Confirm Sale' : 'Sell'
+        }
+        cancelText={sellConfirmation.required ? 'Back' : 'Cancel'}
+        tone={sellConfirmation.required ? 'secondary' : 'danger'}
+      >
+        <div className="space-y-6">
+          {sellConfirmation.required && (
+            <div className="p-4 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-400 text-sm">
+              {sellConfirmation.message}
+            </div>
+          )}
+
+          {alert && (
+            <div className={`p-4 rounded-lg flex items-start gap-3 ${
+              alert.type === 'success' ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-500' : 'bg-rose-500/10 border border-rose-500/30 text-rose-500'
+            }`}>
+              {alert.type === 'success' ? <ShieldCheck size={20} className="shrink-0" /> : <AlertTriangle size={20} className="shrink-0" />}
+              <p className="text-sm font-medium">{alert.message}</p>
+            </div>
+          )}
+          <div className="p-4 bg-slate-900 rounded-xl border border-slate-800 grid grid-cols-2 gap-4">
+            <div>
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">Current Price</span>
+              <span className="font-mono text-white text-lg">${(stocks[sellModal.item?.stock_symbol]?.price || 0).toFixed(2)}</span>
+            </div>
+            <div className="text-right">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">Available</span>
+              <span className="font-mono text-blue-400 text-lg">{sellModal.item?.quantity} shares</span>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Quantity to Sell</label>
+            <div className="flex items-center gap-4">
+              <input 
+                type="number"
+                min="1"
+                max={sellModal.item?.quantity}
+                value={sellModal.quantity}
+                onChange={(e) => setSellModal({ ...sellModal, quantity: Number(e.target.value) })}
+                className="flex-grow bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xl font-bold text-white focus:outline-none focus:border-blue-500"
+                disabled={sellConfirmation.required || isSubmitting}
+              />
+              <button 
+                onClick={() => setSellModal({ ...sellModal, quantity: sellModal.item?.quantity })}
+                className="px-4 py-3 bg-slate-800 hover:bg-slate-700 rounded-xl text-xs font-bold uppercase tracking-widest transition-colors"
+                disabled={sellConfirmation.required || isSubmitting}
+              >
+                MAX
+              </button>
+            </div>
+          </div>
+
+          {sellModal.item && (
+            <div className="p-4 bg-slate-900 rounded-xl border border-slate-800">
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">Projected P/L</span>
+                <div className="text-right">
+                  <p className={`text-lg font-black font-mono ${
+                    ((stocks[sellModal.item.stock_symbol]?.price || 0) - sellModal.item.avg_price) * sellModal.quantity >= 0 
+                    ? 'text-emerald-500' : 'text-rose-500'
+                  }`}>
+                    {((stocks[sellModal.item.stock_symbol]?.price || 0) - sellModal.item.avg_price) * sellModal.quantity >= 0 ? '+' : ''}
+                    ${(((stocks[sellModal.item.stock_symbol]?.price || 0) - sellModal.item.avg_price) * sellModal.quantity).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </p>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase">
+                    Sale proceeds: ${((stocks[sellModal.item.stock_symbol]?.price || 0) * sellModal.quantity).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 };

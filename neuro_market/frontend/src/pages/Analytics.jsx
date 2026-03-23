@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ScatterChart, Scatter, ZAxis, LineChart, Line } from 'recharts';
 import { BarChart3, TrendingUp, Activity, PieChart, ShieldAlert } from 'lucide-react';
+import NeuroLoader from '../components/NeuroLoader';
 
 const Analytics = () => {
   const [history, setHistory] = useState([]);
@@ -62,7 +63,7 @@ const Analytics = () => {
     };
   });
 
-  if (loading) return <div className="flex items-center justify-center h-64"><div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div></div>;
+  if (loading) return <NeuroLoader message="Compiling Psychological Analytics..." />;
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">

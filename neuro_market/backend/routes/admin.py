@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import inspect, text
 from models import database, schemas
 from services import auth
 from typing import List, Optional, Dict, Any
@@ -14,6 +15,95 @@ def require_admin(current_user: database.User = Depends(auth.get_current_user)) 
     if not getattr(current_user, "is_admin", False):
         raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
+
+@router.get("/db/schema")
+def get_db_schema(
+    _: database.User = Depends(require_admin),
+    db: Session = Depends(auth.get_db),
+):
+    inspector = inspect(db.get_bind())
+    schema = []
+    
+    for table_name in inspector.get_table_names():
+        columns = []
+        for col in inspector.get_columns(table_name):
+            columns.append({
+                "name": col["name"],
+                "type": str(col["type"]),
+                "nullable": col["nullable"],
+                "default": str(col["default"]) if col.get("default") else None,
+                "primary_key": col.get("primary_key", False)
+            })
+            
+        pk = inspector.get_pk_constraint(table_name)
+        fks = []
+        for fk in inspector.get_foreign_keys(table_name):
+            fks.append({
+                "constrained_columns": fk["constrained_columns"],
+                "referred_table": fk["referred_table"],
+                "referred_columns": fk["referred_columns"]
+            })
+            
+        count = db.execute(text(f"SELECT COUNT(*) FROM {table_name}")).scalar()
+        
+        schema.append({
+            "table_name": table_name,
+            "columns": columns,
+            "primary_key": pk.get("constrained_columns", []),
+            "foreign_keys": fks,
+            "row_count": count
+        })
+        
+    return schema
+
+@router.get("/db/table/{table_name}/data")
+def get_table_data(
+    table_name: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    search: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: str = Query("asc", regex="^(asc|desc)$"),
+    _: database.User = Depends(require_admin),
+    db: Session = Depends(auth.get_db),
+):
+    inspector = inspect(db.get_bind())
+    if table_name not in inspector.get_table_names():
+        raise HTTPException(status_code=404, detail="Table not found")
+        
+    cols = [c["name"] for c in inspector.get_columns(table_name)]
+    
+    query_str = f"SELECT * FROM {table_name}"
+    params = {}
+    
+    if search:
+        search_clauses = []
+        for col in cols:
+            search_clauses.append(f"{col} LIKE :search")
+        query_str += " WHERE " + " OR ".join(search_clauses)
+        params["search"] = f"%{search}%"
+        
+    if sort_by and sort_by in cols:
+        query_str += f" ORDER BY {sort_by} {sort_order.upper()}"
+        
+    # Get total count for pagination
+    count_query = f"SELECT COUNT(*) FROM ({query_str}) as sub"
+    total_count = db.execute(text(count_query), params).scalar()
+    
+    # Apply pagination
+    offset = (page - 1) * page_size
+    query_str += f" LIMIT {page_size} OFFSET {offset}"
+    
+    result = db.execute(text(query_str), params)
+    rows = [dict(row._mapping) for row in result]
+    
+    return {
+        "rows": rows,
+        "total_count": total_count,
+        "page": page,
+        "page_size": page_size,
+        "columns": cols
+    }
 
 @router.get("/users", response_model=List[schemas.AdminUser])
 def list_users(

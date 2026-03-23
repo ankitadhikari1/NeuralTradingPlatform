@@ -60,6 +60,30 @@ def _compute_max_drawdown(equity: List[float]) -> float:
 def _score_clamp(x: float) -> float:
     return float(max(0.0, min(100.0, float(x))))
 
+def _create_notification(
+    db: Session,
+    user_id: int,
+    type: str,
+    title: str,
+    message: str,
+    symbol: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> database.Notification:
+    n = database.Notification(
+        user_id=int(user_id),
+        type=str(type),
+        title=str(title),
+        message=str(message),
+        symbol=str(symbol).upper() if symbol else None,
+        notification_metadata=json.dumps(metadata) if metadata is not None else None,
+        created_at=_now(),
+        read_at=None,
+    )
+    db.add(n)
+    db.commit()
+    db.refresh(n)
+    return n
+
 def _compute_scores(
     duration_seconds: float,
     total_exec: int,
@@ -1078,7 +1102,8 @@ def leaderboard(
     elif tf == "monthly":
         start = now - timedelta(days=30)
 
-    users = db.query(database.User).order_by(database.User.created_at.asc()).limit(500).all()
+    # Exclude admin users from the leaderboard
+    users = db.query(database.User).filter(database.User.is_admin == False).order_by(database.User.created_at.asc()).limit(500).all()
     default_balance = float(os.getenv("DEFAULT_CASH_BALANCE", "10000"))
 
     entries = []
@@ -1127,3 +1152,103 @@ def leaderboard(
         ranked.append(schemas.LeaderboardEntry(rank=idx, **e))
 
     return schemas.LeaderboardResponse(timeframe=tf, generated_at=now.isoformat(), entries=ranked)
+
+@router.get("/notifications", response_model=schemas.NotificationListResponse)
+def get_notifications(
+    limit: int = 50,
+    offset: int = 0,
+    current_user: database.User = Depends(auth.get_current_user),
+    db: Session = Depends(auth.get_db),
+):
+    total = db.query(database.Notification).filter(database.Notification.user_id == current_user.id).count()
+    unread = db.query(database.Notification).filter(database.Notification.user_id == current_user.id, database.Notification.read_at == None).count()
+    items = (
+        db.query(database.Notification)
+        .filter(database.Notification.user_id == current_user.id)
+        .order_by(database.Notification.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return {"total": total, "unread": unread, "items": items}
+
+@router.post("/notifications/mark_all_read")
+def mark_notifications_read(
+    current_user: database.User = Depends(auth.get_current_user),
+    db: Session = Depends(auth.get_db),
+):
+    db.query(database.Notification).filter(database.Notification.user_id == current_user.id, database.Notification.read_at == None).update(
+        {database.Notification.read_at: _now()}, synchronize_session=False
+    )
+    db.commit()
+    return {"message": "All notifications marked as read"}
+
+@router.delete("/notifications/clear")
+def clear_notifications(
+    current_user: database.User = Depends(auth.get_current_user),
+    db: Session = Depends(auth.get_db),
+):
+    db.query(database.Notification).filter(database.Notification.user_id == current_user.id).delete(synchronize_session=False)
+    db.commit()
+    return {"message": "All notifications cleared"}
+
+@router.post("/notifications/evaluate")
+def evaluate_notifications(
+    current_user: database.User = Depends(auth.get_current_user),
+    db: Session = Depends(auth.get_db),
+):
+    # Stub for alert evaluation
+    return {"message": "Notifications evaluated"}
+
+@router.post("/alerts", response_model=schemas.AlertRule)
+def create_alert(
+    req: schemas.CreatePriceTargetRule,
+    current_user: database.User = Depends(auth.get_current_user),
+    db: Session = Depends(auth.get_db),
+):
+    alert = database.AlertRule(
+        user_id=current_user.id,
+        rule_type="PRICE_TARGET",
+        symbol=req.symbol.upper(),
+        direction=req.direction.upper(),
+        threshold=req.target_price,
+        active=True,
+    )
+    db.add(alert)
+    db.commit()
+    db.refresh(alert)
+    return alert
+
+@router.get("/alerts/{symbol}", response_model=List[schemas.AlertRule])
+def get_alerts(
+    symbol: str,
+    current_user: database.User = Depends(auth.get_current_user),
+    db: Session = Depends(auth.get_db),
+):
+    return (
+        db.query(database.AlertRule)
+        .filter(
+            database.AlertRule.user_id == current_user.id,
+            database.AlertRule.symbol == symbol.upper(),
+            database.AlertRule.active == True,
+        )
+        .all()
+    )
+
+@router.delete("/alerts/{alert_id}")
+def delete_alert(
+    alert_id: int,
+    current_user: database.User = Depends(auth.get_current_user),
+    db: Session = Depends(auth.get_db),
+):
+    alert = (
+        db.query(database.AlertRule)
+        .filter(database.AlertRule.id == alert_id, database.AlertRule.user_id == current_user.id)
+        .first()
+    )
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    
+    db.delete(alert)
+    db.commit()
+    return {"message": "Alert deleted"}

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { UserCog, Search, RefreshCcw, ListTree, BarChart3, History, Brain, Download, Filter } from 'lucide-react';
 
-const Admin = () => {
+const Admin = ({ onRefreshUser }) => {
   const [users, setUsers] = useState([]);
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(true);
@@ -99,8 +99,9 @@ const Admin = () => {
         username: targetUsername,
         amount: Number(amount),
       });
-      setResult(`${resp.data.username} balance: $${Number(resp.data.cash_balance).toLocaleString()}`);
+      setResult(`${resp.data.username} balance: ${Number(resp.data.cash_balance).toLocaleString()}`);
       await fetchUsers(q);
+      if (onRefreshUser) onRefreshUser();
     } catch (e2) {
       setError(e2?.response?.data?.detail || e2?.message || 'Failed to update balance');
     }
