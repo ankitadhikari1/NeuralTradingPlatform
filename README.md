@@ -14,7 +14,7 @@ NeuroMarket Lite is an emotion-aware trading simulator that monitors the user's 
 
 ## Tech Stack
 
-- **Backend**: Python, FastAPI, SQLAlchemy (SQLite), JWT, WebSockets.
+- **Backend**: Python, FastAPI, SQL, JWT, WebSockets.
 - **AI/ML**: DeepFace (Facial Emotion).
 - **Frontend**: React (Vite), TailwindCSS, Recharts, Axios, Lucide Icons.
 - **Market Data**: yfinance API.
