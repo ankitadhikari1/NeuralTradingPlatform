@@ -23,7 +23,14 @@ const EmotionMonitor = () => {
       return;
     }
     videoRef.current.srcObject = stream;
-    try { videoRef.current.play(); } catch {}
+    const playPromise = videoRef.current.play();
+    if (playPromise !== undefined) {
+      playPromise.catch((err) => {
+        if (err.name !== 'AbortError') {
+          console.warn("Monitor video play failed:", err);
+        }
+      });
+    }
   }, [active, stream]);
 
   useEffect(() => {

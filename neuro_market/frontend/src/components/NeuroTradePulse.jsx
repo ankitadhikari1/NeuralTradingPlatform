@@ -133,7 +133,7 @@ const NeuroTradePulse = ({ volatility = 0.5 }) => {
         </div>
       </div>
 
-      <style jsx>{`
+      <style>{`
         @keyframes pulse-slow {
           0%, 100% { transform: scale(1); opacity: 1; }
           50% { transform: scale(1.1); opacity: 0.8; }

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import axios from 'axios';
 
 const EmotionContext = createContext(null);
@@ -49,11 +49,13 @@ export const EmotionProvider = ({ children }) => {
   const reconnectAttemptRef = useRef(0);
   const allowReconnectRef = useRef(false);
   const demoPersistRef = useRef(0);
+  const startingRef = useRef(false);
 
   const wsBase = useMemo(() => toWsBaseUrl(axios.defaults.baseURL || 'http://localhost:8000'), []);
 
-  const stop = () => {
+  const stop = useCallback(() => {
     allowReconnectRef.current = false;
+    startingRef.current = false;
     if (intervalRef.current) clearInterval(intervalRef.current);
     intervalRef.current = null;
 
@@ -74,9 +76,9 @@ export const EmotionProvider = ({ children }) => {
     streamRef.current = null;
     setActive(false);
     setCameraStatus('inactive');
-  };
+  }, []);
 
-  const sendFrame = () => {
+  const sendFrame = useCallback(() => {
     if (!hiddenVideoRef.current || !canvasRef.current || wsRef.current?.readyState !== WebSocket.OPEN) return;
     const video = hiddenVideoRef.current;
     if (video.readyState < 2) return;
@@ -90,9 +92,12 @@ export const EmotionProvider = ({ children }) => {
     ctx.drawImage(video, 0, 0, w, h);
     const frame = canvas.toDataURL('image/jpeg', 0.75);
     wsRef.current.send(JSON.stringify({ frame }));
-  };
+  }, []);
 
-  const start = async () => {
+  const start = useCallback(async () => {
+    if (startingRef.current || active) return;
+    startingRef.current = true;
+
     try {
       setCameraError('');
       setCameraStatus('requesting');
@@ -102,6 +107,7 @@ export const EmotionProvider = ({ children }) => {
       if (!window.isSecureContext && window.location.hostname !== 'localhost') {
         setCameraStatus('error');
         setCameraError('Camera requires a secure context. Open the app on http://localhost (not the LAN IP).');
+        startingRef.current = false;
         return;
       }
 
@@ -122,13 +128,21 @@ export const EmotionProvider = ({ children }) => {
       setActive(true);
       setCameraStatus('starting');
 
-      try { await hiddenVideoRef.current.play(); } catch {}
+      try { 
+        const playPromise = hiddenVideoRef.current.play();
+        if (playPromise !== undefined) {
+          await playPromise;
+        }
+      } catch (err) {
+        console.warn("Hidden video play interrupted:", err);
+      }
       setCameraStatus('streaming');
 
       const token = localStorage.getItem('token') || '';
       if (!token) {
         setWsStatus('error');
         setCameraError('Login required: missing token. Please log out and log in again.');
+        startingRef.current = false;
         return;
       }
 
@@ -212,46 +226,51 @@ export const EmotionProvider = ({ children }) => {
       setCameraStatus('error');
       setCameraError(e?.message || 'Failed to access webcam.');
       stop();
+    } finally {
+      startingRef.current = false;
     }
-  };
+  }, [active, stop, sendFrame, wsBase]);
 
-  const simulateEmotion = (next) => {
-    const e = {
-      state: String(next?.state || emotion.state),
-      confidence: Number(next?.confidence ?? emotion.confidence) || 0,
-      face: next?.face || emotion.face || { neutral: 1.0 },
-      face_status: next?.face_status || 'simulated',
-      eeg: next?.eeg || { alpha: 0, beta: 0, gamma: 0, theta: 0, delta: 0 },
-      timestamp: Date.now(),
-    };
-    setEmotion(e);
-    setTimeline((prev) => [
-      ...prev.slice(-59),
-      { time: new Date().toLocaleTimeString(), confidence: (e.confidence || 0) * 100, emotion: e.state },
-    ]);
-    setEegHistory((prev) => {
-      const eeg = e.eeg || { alpha: 0, beta: 0, gamma: 0, theta: 0, delta: 0 };
-      return {
-        alpha: [...prev.alpha.slice(1), eeg.alpha],
-        beta: [...prev.beta.slice(1), eeg.beta],
-        gamma: [...prev.gamma.slice(1), eeg.gamma],
-        theta: [...prev.theta.slice(1), eeg.theta],
-        delta: [...prev.delta.slice(1), eeg.delta],
-        labels: [...prev.labels.slice(1), new Date().toLocaleTimeString().split(' ')[0]],
+  const simulateEmotion = useCallback((next) => {
+    setEmotion((prev) => {
+      const e = {
+        state: String(next?.state || prev.state),
+        confidence: Number(next?.confidence ?? prev.confidence) || 0,
+        face: next?.face || prev.face || { neutral: 1.0 },
+        face_status: next?.face_status || 'simulated',
+        eeg: next?.eeg || { alpha: 0, beta: 0, gamma: 0, theta: 0, delta: 0 },
+        timestamp: Date.now(),
       };
-    });
 
-    const now = Date.now();
-    if (now - demoPersistRef.current >= 1500) {
-      demoPersistRef.current = now;
-      axios
-        .post('/emotion/log', {
-          emotion: String(e.state || 'calm').toLowerCase(),
-          confidence: Math.max(0, Math.min(1, Number(e.confidence || 0))),
-        })
-        .catch(() => {});
-    }
-  };
+      setTimeline((prevT) => [
+        ...prevT.slice(-59),
+        { time: new Date().toLocaleTimeString(), confidence: (e.confidence || 0) * 100, emotion: e.state },
+      ]);
+      setEegHistory((prevH) => {
+        const eeg = e.eeg || { alpha: 0, beta: 0, gamma: 0, theta: 0, delta: 0 };
+        return {
+          alpha: [...prevH.alpha.slice(1), eeg.alpha],
+          beta: [...prevH.beta.slice(1), eeg.beta],
+          gamma: [...prevH.gamma.slice(1), eeg.gamma],
+          theta: [...prevH.theta.slice(1), eeg.theta],
+          delta: [...prevH.delta.slice(1), eeg.delta],
+          labels: [...prevH.labels.slice(1), new Date().toLocaleTimeString().split(' ')[0]],
+        };
+      });
+
+      const now = Date.now();
+      if (now - demoPersistRef.current >= 1500) {
+        demoPersistRef.current = now;
+        axios
+          .post('/emotion/log', {
+            emotion: String(e.state || 'calm').toLowerCase(),
+            confidence: Math.max(0, Math.min(1, Number(e.confidence || 0))),
+          })
+          .catch(() => {});
+      }
+      return e;
+    });
+  }, []);
 
   useEffect(() => {
     const handler = () => stop();
@@ -259,7 +278,7 @@ export const EmotionProvider = ({ children }) => {
     return () => window.removeEventListener('beforeunload', handler);
   }, []);
 
-  const value = {
+  const value = useMemo(() => ({
     active,
     cameraStatus,
     cameraError,
@@ -274,7 +293,20 @@ export const EmotionProvider = ({ children }) => {
     simulateEmotion,
     demoRules,
     setDemoRules,
-  };
+  }), [
+    active,
+    cameraStatus,
+    cameraError,
+    wsStatus,
+    wsCloseInfo,
+    emotion,
+    timeline,
+    eegHistory,
+    start,
+    stop,
+    simulateEmotion,
+    demoRules,
+  ]);
 
   return <EmotionContext.Provider value={value}>{children}</EmotionContext.Provider>;
 };
